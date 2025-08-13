@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Tyler Portfolio Part Thing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { --scroll-length: 320vh; --bg:#0b0b0b; --fg:#e9e9e9; --muted:#c8c8c8; --accent:#7dd3fc; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+
+  header, footer { max-width:64rem; margin:0 auto; padding:6rem 1.5rem; opacity:.96; }
+  header p, footer p { color:var(--muted); margin:.25rem 0 0; }
+
+  .scroller { position:relative; height: var(--scroll-length); }
+  .sticky   { position: sticky; top: 0; height: 100vh; background:#000; display:grid; place-items:center; }
+  .stage    { position: relative; width: 100vw; aspect-ratio: 16 / 9; background:#000; }
+  .stage img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+               user-select:none; pointer-events:none; background:#000; }
+  #scrubFront { z-index: 2; }
+  #scrubBack  { z-index: 1; }
+  #finalImg   { z-index: 3; opacity:0; transition: opacity 140ms linear; }
+
+  .hint { position:absolute; bottom:1rem; right:1rem; font-size:.85rem; opacity:.85;
+          background:rgba(0,0,0,.45); padding:.45rem .6rem; border-radius:.55rem; backdrop-filter:blur(3px); }
+
+  /* Preload overlay (locks scroll) */
+  .preload-overlay {
+    position: fixed; inset: 0; background: rgba(5,5,5,.92);
+    display: grid; place-items: center; z-index: 9999;
+  }
+  .preload-card {
+    width: min(520px, 92vw); border:1px solid #2a2a2a; border-radius: 12px; padding: 1rem 1.25rem; background: #111;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  }
+  .preload-card h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
+  .bar { height: 10px; background:#222; border-radius: 999px; overflow:hidden; }
+  .fill { height:100%; width:0%; background: var(--accent); transition: width .12s ease; }
+  .meta { margin-top:.5rem; color:#bdbdbd; font-size:.9rem; display:flex; justify-content:space-between; gap:.75rem; }
+  .footnote { margin-top:.35rem; color:#9aa; font-size:.8rem; }
+  .hidden { display:none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scroller { height: 120vh; }
+    .hint { display:none; }
+  }
+</style>
+</head>
+<body>
+  <div id="preloadOverlay" class="preload-overlay">
+    <div class="preload-card">
+      <h2>Loading Portfolio…</h2>
+      <div class="bar"><div id="barFill" class="fill"></div></div>
+      <div class="meta">
+        <div><span id="count">0</span>/<span id="total">0</span> ready</div>
+        <div id="modeLabel">mode: decode-all</div>
+      </div>
+      <div class="footnote">Please wait while my portfolio loads...</div>
+    </div>
+  </div>
+
+  <header>
+    <h1>Tyler Williams</h1>
+    <p>"Nothing less then the best"</code>.</p>
+  </header>
+
+  <section id="scrub"
+    class="scroller"
+    data-total="381"
+    data-base="frames/frame_"
+    data-pad="4"
+    data-ext="webp"
+    data-fade-frac="0.10"
+    data-preload-mode="decode-all"
+    data-concurrency="12">          <!-- how many to load in parallel -->
+    <div class="sticky">
+      <div class="stage">
+        <img id="scrubBack"  alt="">
+        <img id="scrubFront" alt="">
+        <img id="finalImg"   alt="">
+      </div>
+      <div class="hint">Scroll to scrub</div>
+    </div>
+  </section>
+
+  <footer>
+    <p>"Nothing less then the best".</p>
+  </footer>
+
+<script>
+(function(){
+  const section = document.getElementById('scrub');
+  const TOTAL   = parseInt(section.dataset.total, 10);
+  const BASE    = section.dataset.base || 'frames/frame_';
+  const PAD     = parseInt(section.dataset.pad || '0', 10) || 0;
+  const EXT     = section.dataset.ext || 'webp';
+  const FADE_FR = Math.min(Math.max(parseFloat(section.dataset.fadeFrac || '0.1'), 0.01), 0.5);
+  const MODE    = (section.dataset.preloadMode || 'decode-all').toLowerCase(); // 'decode-all' | 'network-all'
+  const CONC    = Math.max(parseInt(section.dataset.concurrency || '8', 10), 1);
+
+  const imgFront = document.getElementById('scrubFront');
+  const imgBack  = document.getElementById('scrubBack');
+  const finalImg = document.getElementById('finalImg');
+
+  const overlay  = document.getElementById('preloadOverlay');
+  const barFill  = document.getElementById('barFill');
+  const countEl  = document.getElementById('count');
+  const totalEl  = document.getElementById('total');
+  const modeLbl  = document.getElementById('modeLabel');
+
+  totalEl.textContent = String(TOTAL);
+  modeLbl.textContent = `mode: ${MODE}`;
+
+  const pad = (n,w) => String(n).padStart(w, '0');
+  const src = i => `${BASE}${PAD ? pad(i, PAD) : i}.${EXT}`;
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+  // lock scroll during preload
+  const prevOverflow = document.documentElement.style.overflow;
+  document.documentElement.style.overflow = 'hidden';
+
+  // Preload queue with limited concurrency
+  const urls = Array.from({length: TOTAL}, (_, k) => src(k + 1));
+  let done = 0;
+  function updateProgress() {
+    done++; countEl.textContent = String(done);
+    barFill.style.width = `${(done / TOTAL) * 100}%`;
+  }
+
+  function loadImage(url, decodeIt) {
+    return new Promise((resolve, reject) => {
+      const im = new Image();
+      im.decoding = 'async';
+      im.src = url;
+      const onload = () => {
+        if (decodeIt) {
+          // decode() can reject in Safari while image is still OK; fallback to onload
+          im.decode().then(() => resolve(im)).catch(() => resolve(im));
+        } else {
+          resolve(im);
+        }
+      };
+      im.onload = onload;
+      im.onerror = reject;
+    }).then(img => { updateProgress(); return img; });
+  }
+
+  async function runWithConcurrency(decodeIt) {
+    const results = new Array(TOTAL);
+    let idx = 0;
+    const workers = new Array(Math.min(CONC, TOTAL)).fill(0).map(async () => {
+      while (idx < TOTAL) {
+        const my = idx++;
+        try {
+          results[my] = await loadImage(urls[my], decodeIt);
+        } catch (e) {
+          console.error('Failed to load', urls[my], e);
+        }
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
+
+  // Preload all, then enable scrubbing
+  (async () => {
+    const decodeAll = MODE === 'decode-all';
+    await runWithConcurrency(decodeAll);
+
+    // Init scrubber (double buffer, swap only after decoded images exist in cache)
+    const cache = new Map(); // idx -> Image (already loaded; maybe decoded)
+    for (let i = 1; i <= TOTAL; i++) cache.set(i, { src: src(i) });
+
+    // draw first + final, release overlay and unlock scroll
+    imgFront.src = cache.get(1).src;
+    imgBack.src  = cache.get(1).src;
+    finalImg.src = cache.get(TOTAL).src;
+
+    overlay.classList.add('hidden');
+    document.documentElement.style.overflow = prevOverflow || '';
+
+    let currentIdx = 1;
+    let targetIdx  = 1;
+    let ticking    = false;
+
+    function progress() {
+      const rect = section.getBoundingClientRect();
+      const vh = window.innerHeight || document.documentElement.clientHeight;
+      const totalScroll = rect.height - vh;
+      const passed = Math.min(Math.max(-rect.top, 0), totalScroll);
+      return totalScroll > 0 ? passed / totalScroll : 0;
+    }
+
+    function swapTo(idx) {
+      if (idx === currentIdx || idx < 1 || idx > TOTAL) return;
+      // Write new frame onto the hidden layer, then flip z-order by swapping srcs
+      const newSrc = cache.get(idx).src;
+      imgBack.src  = newSrc;
+
+      // Flip: copy back to front (no opacity change, no blank)
+      const tmp = imgFront.src;
+      imgFront.src = imgBack.src;
+      imgBack.src  = tmp;
+
+      currentIdx = idx;
+    }
+
+    function render() {
+      ticking = false;
+
+      const p = progress();
+      const fadeStart = 1 - FADE_FR;
+
+      let idx = Math.floor(p * (TOTAL - 1)) + 1;
+      if (idx >= TOTAL) idx = TOTAL - 1;
+
+      if (idx !== targetIdx) {
+        targetIdx = idx;
+        swapTo(idx);
+      }
+
+      if (p >= fadeStart) {
+        const t = clamp((p - fadeStart) / FADE_FR, 0, 1);
+        const eased = t*t*(3 - 2*t);
+        finalImg.style.opacity = String(eased);
+      } else {
+        finalImg.style.opacity = '0';
+      }
+    }
+
+    function schedule(){ if (!ticking) { ticking = true; requestAnimationFrame(render); } }
+
+    // Initial paint (in case already scrolled)
+    schedule();
+    window.addEventListener('scroll', schedule, { passive:true });
+    window.addEventListener('resize', schedule);
+  })().catch(e => {
+    console.error('Preload failed:', e);
+    // If something goes wrong, at least unlock scroll
+    overlay.classList.add('hidden');
+    document.documentElement.style.overflow = prevOverflow || '';
+  });
+})();
+</script>
+</body>
+</html>
